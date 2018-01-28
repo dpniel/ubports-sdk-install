@@ -6,7 +6,6 @@ The container includes the sdk libraries and also install qtcreator from upstrea
 doesn't work so great. A desktop file will be created so you can launch qtcreator from your applications menu.
 
 
-
 ## Getting Setup
 
 Clone this repo
@@ -16,6 +15,9 @@ git clone https://github.com/dpniel/ubports-sdk-setup
 cd ubports-sdk-setup
 ```
 
+You will need to install lxd first and run `sudo lxd init` and setup a default profile. Don't forget to reboot after.
+
+
 Then to create a development container run the following
 
 
@@ -24,6 +26,8 @@ NOTE: By default the container targets xenial 16.04. To target a different relea
 ```
 ./ubports-sdk-setup -d
 ```
+
+Once it's all installe
 
 or if you want a cross build container
 
@@ -35,6 +39,10 @@ If you want to change the default install location of qtcreator you can set the 
 
 To use a different name for a container just pass it to the setup script `./ubports-sdk-setup -d mycontainer`
 
+The container naming is created from $CONTAINER_NAME-$TYPE so for `-d mycontainer` the container name would be `mycontainer-dev` or
+`mycontainer-cross` if `-c` is used. the default container names are `ubports-dev` and `ubports-cross`
+
+To get shell access in the container run `lxc exec CONTAINER_NAME -- sudo --login --user ubuntu`
 
 
 Still todo
