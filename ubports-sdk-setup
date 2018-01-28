@@ -1,0 +1,339 @@
+#!/bin/bash
+
+set -e
+
+INSTALLER=qt-opensource-linux-x64-5.9.3.run
+QTCREATOR_INSTALL_DIR=${QTCREATOR_INSTALL_DIR:=$HOME/.ubports/Qt}
+CONTAINER=${CONTAINER:=ubports}
+TARGET=${TARGET:=ubuntu:16.04}
+USER_UID=$(id -u)
+USER_GID=$(id -g)
+
+TYPE=dev
+
+CONTAINER_NAME=$CONTAINER-$TYPE
+
+opts="cdht:"
+
+function info_msg() {
+    echo -e "\033[1;32m [ ${CONTAINER_NAME} ] $1\033[0m"
+}
+
+function error_msg() {
+    echo -e "\033[0;31m [ ${CONTAINER_NAME} ] $1\033[0m"
+}
+
+function cmd() { echo `basename $0`; }
+
+function usage() {
+    echo "\
+    `cmd` [OPTIONS...] CONTAINER (default: ubports-(dev/cross)
+    -d, --dev; Create a development container
+    -c, --cross; Create a cross build container
+    -t, --target; What lxc image to use (default: $TARGET)
+    " | column -t -s ";"
+}
+
+function error() {
+    error_msg "`cmd`: invalid option -- '$1'";
+    echo "Try '`cmd` -h' for more info";
+    exit 1;
+}
+
+function check_lxd_init() {
+   lxc profile device show default | grep nic > /dev/null
+   
+   if [ $? -ne 0 ]; then
+      error_msg "You need to run 'sudo lxd init' and reboot before continuing"
+      exit 1; 
+   else
+      info_msg "default lxd profile already configured";
+   fi
+}
+
+function check_uid_gid() {
+    uidvalue="root:${USER_UID}:1"
+    gidvalue="root:${USER_GID}:1"
+    cat /etc/subuid | grep $uidvalue > /dev/null
+    
+    if [ $? -ne 0 ]; then
+      echo $uidvalue | sudo tee -a /etc/subuid
+      echo $gidvalue | sudo tee -a /etc/subgid
+      exit 1;
+   fi
+}
+
+function run_exec() {
+    lxc exec $CONTAINER_NAME -- sh -c "$1"
+}
+
+function run_exec_user() {
+    lxc exec $CONTAINER_NAME -- sudo --login --user ubuntu sh -c "$1"
+}
+
+function create_base_container() {
+    lxc init $TARGET $CONTAINER_NAME
+    lxc config set $CONTAINER_NAME raw.idmap "both ${USER_UID} ${USER_GID}"
+    lxc config device add $CONTAINER_NAME homedir disk source=/home/${USER} path=/home/ubuntu
+    lxc config set $CONTAINER_NAME raw.lxc "lxc.apparmor.profile=unconfined"
+    lxc config set $CONTAINER_NAME security.privileged "true"
+}
+
+function configure_cross_build() {
+    info_msg "Sources.list changed to:"
+    run_exec "echo \"deb [arch=amd64] http://archive.ubuntu.com/ubuntu xenial main resticted multiverse universe\" > /etc/apt/sources.list && \
+        echo \"deb [arch=amd64] http://archive.ubuntu.com/ubuntu xenial-updates main resticted multiverse universe\" >> /etc/apt/sources.list && \
+        echo \"deb [arch=amd64] http://archive.ubuntu.com/ubuntu xenial-security main resticted multiverse universe\" >> /etc/apt/sources.list && \
+        echo \"deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main resticted multiverse universe\" >> /etc/apt/sources.list && \
+        echo \"deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main resticted multiverse universe\" >> /etc/apt/sources.list && \
+        echo \"deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main restricted multiverse universe\" >> /etc/apt/sources.list"
+
+    run_exec "cat /etc/apt/sources.list"
+    echo "---------------"
+
+    info_msg "Adding armhf arhitecture"
+    run_exec "dpkg --add-architecture armhf && apt-get update"
+}
+
+function configure_dev_container() {
+    lxc config device add $CONTAINER_NAME X0 disk path=/tmp/.X11-unix/X0 source=/tmp/.X11-unix/X0
+    lxc config device add $CONTAINER_NAME Xauthority disk path=/home/ubuntu/.Xauthority source=${XAUTHORITY}
+    lxc config device add $CONTAINER_NAME mygpu gpu
+    lxc config device set $CONTAINER_NAME mygpu uid ${USER_UID}
+    lxc config device set $CONTAINER_NAME mygpu gid ${USER_GID}
+}
+
+function configure_user_dev_container() {
+    info_msg "Configuring X11 display"
+    run_exec_user "echo \"export DISPLAY=:0\" >> ~/.profile"
+    # NOTE: For sound to work you need to install paprefs and tick "Enable network access to local sound devices"
+    # in the "Network Server" tab
+    info_msg "Configuring audio"
+    run_exec_user "mkdir -p /home/ubuntu/.config/pulse/ && \
+        echo export PULSE_SERVER=\"tcp:`ip route show 0/0 | awk '{print $3}'`\" >> ~/.profile && \
+        echo export PULSE_COOKIE=/home/ubuntu/.config/pulse/cookie >> ~/.profile"
+    lxc config device add $CONTAINER_NAME PACookie disk path=/home/ubuntu/.config/pulse/cookie source=/home/${USER}/.config/pulse/cookie
+}
+
+
+function add_overlay_ppa() {
+    info_msg "Adding overlay ppa"
+    run_exec "add-apt-repository -y ppa:ci-train-ppa-service/stable-phone-overlay && apt-get update"
+    #info_msg "Pinning overlay ppa"
+    #run_exec "echo \"Package: *\" > /etc/apt/preferences.d/stable-phone-overlay.pref && \
+    #    echo \"Pin: release o=LP-PPA-ci-train-ppa-service-stable-phone-overlay\" >> /etc/apt/preferences.d/stable-phone-overlay.pref && \
+    #    echo \"Pin-Priority: 1001\" >> /etc/apt/preferences.d/stable-phone-overlay.pref"
+}
+
+function add_ubports_repo() {
+    info_msg "Adding ubports repo"
+    run_exec "echo \"deb http://repo.ubports.com xenial main\" >> /etc/apt/sources.list && \
+        wget -qO - http://repo.ubports.com/keyring.gpg | apt-key add -"
+    info_msg "Pinning ubports repo"
+    run_exec "echo \"Package: *\" > /etc/apt/preferences.d/ubports.pref && \
+        echo \"Pin: origin repo.ubports.com\" >> /etc/apt/preferences.d/ubports.pref && \
+        echo \"Pin-Priority: 2000\" >> /etc/apt/preferences.d/ubports.pref"
+}
+
+function install_dev_libs() {
+    info_msg "Installing sdk packages"
+    run_exec "apt-get -y --no-install-recommends install \
+        apt-utils \
+        build-essential \
+        cmake \
+        fakeroot \
+        libc-dev \
+        isc-dhcp-client \
+        net-tools \
+        ifupdown \
+        clang \
+        pkg-config \
+        ubuntu-sdk-libs \
+        ubuntu-sdk-libs-dev \
+        ubuntu-sdk-libs-tools \
+        oxideqt-codecs-extra \
+        qt5-doc \
+        language-pack-en \
+        click \
+        webapp-container \
+        dbus \
+        dbus-x11 \
+        xdg-utils"
+}
+
+function install_cross_build_libs() {
+    
+    info_msg "Installing sdk packages"
+    run_exec "apt-get -y --no-install-recommends install \
+        apt-utils \
+        build-essential \
+        cmake \
+        dpkg-cross \
+        fakeroot \
+        libc-dev:armhf \
+        isc-dhcp-client \
+        net-tools \
+        ifupdown \
+        g++-arm-linux-gnueabihf \
+        pkg-config-arm-linux-gnueabihf \
+        libjsoncpp1:armhf \
+        libnet-cpp2:armhf \
+        libprocess-cpp3:armhf \
+        libqt5keychain0:armhf \
+        libqt5multimedia5-plugins:armhf \
+        libqt5sql5-sqlite:armhf \
+        qml-module-qt-labs-folderlistmodel:armhf \
+        qml-module-qt-labs-settings:armhf \
+        qml-module-qt-websockets:armhf \
+        qml-module-qtbluetooth:armhf \
+        qml-module-qtgraphicaleffects:armhf \
+        qml-module-qtlocation:armhf \
+        qml-module-qtmultimedia:armhf \
+        qml-module-qtorganizer:armhf \
+        qml-module-qtpositioning:armhf \
+        qml-module-qtpurchasing:armhf \
+        qml-module-qtqml-models2:armhf \
+        qml-module-qtqml-statemachine:armhf \
+        qml-module-qtquick-layouts:armhf \
+        qml-module-qtquick-localstorage:armhf \
+        qml-module-qtquick-particles2:armhf \
+        qml-module-qtquick-window2:armhf \
+        qml-module-qtquick-xmllistmodel:armhf \
+        qml-module-qtquick2:armhf \
+        qml-module-qtsensors:armhf \
+        qml-module-qtsysteminfo:armhf \
+        qml-module-ubuntu-onlineaccounts:armhf \
+        qml-module-ubuntu-onlineaccounts-client:armhf \
+        qmlscene:armhf \
+        qt5-image-formats-plugins:armhf \
+        qtchooser:armhf \
+        qtdeclarative5-poppler1.0:armhf \
+        qtdeclarative5-u1db1.0:armhf \
+        qtdeclarative5-ubuntu-download-manager0.1:armhf \
+        qtdeclarative5-ubuntu-mediascanner0.1:armhf \
+        qtdeclarative5-ubuntu-push-plugin:armhf \
+        qtdeclarative5-ubuntu-syncmonitor0.1:armhf \
+        qtdeclarative5-ubuntu-telephony-phonenumber0.1:armhf \
+        qtdeclarative5-ubuntu-ui-toolkit-plugin:armhf \
+        qtdeclarative5-usermetrics0.1:armhf \
+        ubuntu-html5-theme:armhf \
+        ubuntu-ui-toolkit-theme:armhf \
+        google-mock:armhf \
+        libjsoncpp-dev:armhf \
+        libnet-cpp-dev:armhf \
+        libprocess-cpp-dev:armhf \
+        libproperties-cpp-dev:armhf \
+        libqt5sensors5-dev:armhf \
+        libqt5svg5-dev:armhf \
+        libqt5websockets5-dev:armhf \
+        libqt5xmlpatterns5-dev:armhf \
+        libssl-dev:armhf \
+        libunity-scopes-dev:armhf \
+        qt3d5-dev:armhf \
+        qt5-default:armhf \
+        qtbase5-dev:armhf \
+        qtconnectivity5-dev:armhf \
+        qtdeclarative5-dev:armhf \
+        qtdeclarative5-dev-tools:armhf \
+        qtlocation5-dev:armhf \
+        qtmultimedia5-dev:armhf \
+        qtpim5-dev:armhf \
+        qttools5-dev:armhf \
+        ubuntu-sdk-qmake-extras:armhf \
+        intltool:armhf \
+        qttools5-dev-tools:armhf \
+        oxideqt-codecs-extra \
+        qt5-doc \
+        language-pack-en \
+        click"
+}
+
+function install_a_decent_qtcreator() {
+    info_msg "Installing a known working qtcreator but this might take a little while";
+    echo "Fetching $INSTALLER"
+    wget https://download.qt.io/archive/qt/5.9/5.9.3/$INSTALLER
+
+    info_msg "Installing Qt to $QTCREATOR_INSTALL_DIR"
+    ./scripts/silent-install-qt $PWD/$INSTALLER $QTCREATOR_INSTALL_DIR
+    
+    rm $INSTALLER
+    
+    info_msg "Creating desktop file to launch qtcreator in container."
+    cat ./qtcreator-ubports.desktop | \
+        sed 's|%CONTAINER_NAME%|'${CONTAINER_NAME}'|' | \
+        sed 's|%QT_DIR%|'${QTCREATOR_INSTALL_DIR}'|' | \
+        sed 's|'${USER}'|ubuntu|' > $HOME/.local/share/applications/qtcreator-ubports.desktop
+    info_msg "You will now find 'Qt Creator (UBports)' in your application menu"
+}
+
+while [ "$1" != "" ]; do
+    PARAM=`echo $1 | awk -F= '{print $1}'`
+    VALUE=`echo $1 | awk -F= '{print $2}'`
+    case $PARAM in
+        -h | --help)
+            usage
+            exit
+            ;;
+        -d | --dev)
+            TYPE=dev
+            ;;
+        -c | --cross)
+            TYPE=cross
+            ;;
+        -t | --target)
+            TARGET=$VALUE
+            ;;
+        *)
+            CONTAINER=$PARAM
+            ;;
+    esac
+    shift
+done
+
+
+CONTAINER_NAME=$CONTAINER-$TYPE
+
+check_lxd_init
+
+check_uid_gid
+
+create_base_container
+
+if [ $TYPE == "dev" ]; then
+    configure_dev_container
+fi
+
+info_msg "Starting container..."
+lxc start $CONTAINER_NAME
+sleep 30
+
+if [ $TYPE == "cross" ]; then
+    configure_cross_build
+fi
+
+info_msg "Adding overlay ppa and ubports repo"
+add_overlay_ppa
+
+# FIXME: Once we are nolonger using the overlay ppa switch to ubports repo
+# add_ubports_repo
+     
+info_msg "Running full upgrade"
+run_exec "apt-get update && apt-get -y --no-install-recommends --allow-downgrades dist-upgrade"
+
+if [ $TYPE == "cross" ]; then
+    install_cross_build_libs
+fi
+
+if [ $TYPE == "dev" ]; then
+    install_dev_libs
+    if [ ! -d "$QTCREATOR_INSTALL_DIR" ]; then
+        install_a_decent_qtcreator
+    fi
+    configure_user_dev_container
+fi
+
+info_msg "Restarting container"
+lxc restart $CONTAINER_NAME
+sleep 10
+
+info_msg "Good to go.. \o/"
