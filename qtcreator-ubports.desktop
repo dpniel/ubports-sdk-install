@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Exec=lxc exec %CONTAINER_NAME% -- sudo --login --user ubuntu %QT_DIR%/Tools/QtCreator/bin/qtcreator
-Name=Qt Creator (UBports)
+Exec=lxc exec %CONTAINER_NAME% -- sudo --login --user ubuntu /home/ubuntu/.ubports/Qt/Tools/QtCreator/bin/qtcreator
+Name=Qt Creator (%CONTAINER_NAME%)
 GenericName=The IDE of choice for Qt development.
 Icon=QtProject-qtcreator
 StartupWMClass=qtcreator

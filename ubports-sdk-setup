@@ -2,8 +2,9 @@
 
 set -e
 
+UBPORTS_HOME=${UBPORTS_HOME:=$HOME/UBports}
 INSTALLER=qt-opensource-linux-x64-5.9.3.run
-QTCREATOR_INSTALL_DIR=${QTCREATOR_INSTALL_DIR:=$HOME/.ubports/Qt}
+QTCREATOR_INSTALL_DIR=${UBPORTS_HOME}/.ubports/Qt
 CONTAINER=${CONTAINER:=ubports}
 TARGET=${TARGET:=ubuntu:16.04}
 USER_UID=$(id -u)
@@ -12,6 +13,7 @@ USER_GID=$(id -g)
 TYPE=dev
 
 CONTAINER_NAME=$CONTAINER-$TYPE
+HOST_CACHE_DIR=${HOME}/.cache/ubports
 
 opts="cdht:"
 
@@ -40,6 +42,26 @@ function error() {
     exit 1;
 }
 
+function create_ubports_directory() {
+    info_msg "Creating UBports home directory"
+    mkdir -p ${UBPORTS_HOME}/Projects
+    mkdir -p ${UBPORTS_HOME}/Tools
+    mkdir -p ${UBPORTS_HOME}/Examples
+    mkdir -p ${UBPORTS_HOME}/.ubports
+    
+    if [ -d "${HOME}/.ssh" ]; then
+        info_msg "Linking ssh keys"
+        ln -s ${HOME}/.ssh ${UBPORTS_HOME}/.ssh
+    fi
+    
+    if [ -f "${HOME}/.gitconfig" ]; then
+        info_msg "Copying gitconfig"
+        cp ${HOME}/.gitconfig ${UBPORTS_HOME}
+    fi 
+    
+    ls -al ${UBPORTS_HOME}
+}
+
 function check_lxd_init() {
    lxc profile device show default | grep nic > /dev/null
    
@@ -59,7 +81,6 @@ function check_uid_gid() {
     if [ $? -ne 0 ]; then
       echo $uidvalue | sudo tee -a /etc/subuid
       echo $gidvalue | sudo tee -a /etc/subgid
-      exit 1;
    fi
 }
 
@@ -74,7 +95,7 @@ function run_exec_user() {
 function create_base_container() {
     lxc init $TARGET $CONTAINER_NAME
     lxc config set $CONTAINER_NAME raw.idmap "both ${USER_UID} ${USER_GID}"
-    lxc config device add $CONTAINER_NAME homedir disk source=/home/${USER} path=/home/ubuntu
+    lxc config device add $CONTAINER_NAME homedir disk source=${UBPORTS_HOME} path=/home/ubuntu
     lxc config set $CONTAINER_NAME raw.lxc "lxc.apparmor.profile=unconfined"
     lxc config set $CONTAINER_NAME security.privileged "true"
 }
@@ -158,7 +179,8 @@ function install_dev_libs() {
         webapp-container \
         dbus \
         dbus-x11 \
-        xdg-utils"
+        xdg-utils \
+        chromium-browser"
 }
 
 function install_cross_build_libs() {
@@ -250,20 +272,23 @@ function install_cross_build_libs() {
 
 function install_a_decent_qtcreator() {
     info_msg "Installing a known working qtcreator but this might take a little while";
-    echo "Fetching $INSTALLER"
-    wget https://download.qt.io/archive/qt/5.9/5.9.3/$INSTALLER
+    
+    if [ ! -d "$HOST_CACHE_DIR" ]; then
+        mkdir -p $HOST_CACHE_DIR
+    fi
+    
+    if [ ! -f "$HOST_CACHE_DIR/$INSTALLER" ]; then
+        echo "Fetching $INSTALLER"
+        wget https://download.qt.io/archive/qt/5.9/5.9.3/$INSTALLER -O $HOST_CACHE_DIR/$INSTALLER
+    fi
 
     info_msg "Installing Qt to $QTCREATOR_INSTALL_DIR"
-    ./scripts/silent-install-qt $PWD/$INSTALLER $QTCREATOR_INSTALL_DIR
-    
-    rm $INSTALLER
+    ./scripts/silent-install-qt $HOST_CACHE_DIR/$INSTALLER $QTCREATOR_INSTALL_DIR
     
     info_msg "Creating desktop file to launch qtcreator in container."
     cat ./qtcreator-ubports.desktop | \
-        sed 's|%CONTAINER_NAME%|'${CONTAINER_NAME}'|' | \
-        sed 's|%QT_DIR%|'${QTCREATOR_INSTALL_DIR}'|' | \
-        sed 's|'${USER}'|ubuntu|' > $HOME/.local/share/applications/qtcreator-ubports.desktop
-    info_msg "You will now find 'Qt Creator (UBports)' in your application menu"
+        sed 's|%CONTAINER_NAME%|'${CONTAINER_NAME}'|' > $HOME/.local/share/applications/qtcreator-${CONTAINER_NAME}.desktop
+    info_msg "You will now find 'Qt Creator (${CONTAINER_NAME})' in your application menu"
 }
 
 function install_clickable_stuffs() {
@@ -302,7 +327,15 @@ while [ "$1" != "" ]; do
 done
 
 
-CONTAINER_NAME=$CONTAINER-$TYPE
+if [ $TYPE == "cross" ]; then
+    CONTAINER_NAME=$CONTAINER-$TYPE
+else
+    CONTAINER_NAME=$CONTAINER
+fi
+
+if [ ! -d "$UBPORTS_HOME" ]; then
+    create_ubports_directory
+fi
 
 check_lxd_init
 
