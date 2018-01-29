@@ -27,8 +27,6 @@ NOTE: By default the container targets xenial 16.04. To target a different relea
 ./ubports-sdk-setup -d
 ```
 
-Once it's all installe
-
 or if you want a cross build container
 
 ```
@@ -44,10 +42,15 @@ The container naming is created from $CONTAINER_NAME-$TYPE so for `-d mycontaine
 
 To get shell access in the container run `lxc exec CONTAINER_NAME -- sudo --login --user ubuntu`
 
+From the container shell you can use clickable to build your armhf clicks or install any other
+dependencies you might need.
+
+Clickable is installed from the the clickable ppa so will update along with the rest of the container.
+
 
 Still todo
 
-* [] Make this README better
-* [] USB Passthrough
-* [] Automate enablement of sound via paprefs on host (is this possible)
-* [] Support multiple containers - currently qtcreator only get's configured for the first dev container. 
+* [ ] Make this README better
+* [ ] USB Passthrough - can possibly be achieved for libusb capable devices by running `lxc config device add $CONTAINER_NAME phone usb vendorid=... productid=...` using the output from lsusb.
+* [ ] Automate enablement of sound via paprefs on host (is this possible)
+* [ ] Support multiple containers - currently qtcreator only get's configured for the first dev container. 

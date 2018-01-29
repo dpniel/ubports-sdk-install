@@ -266,6 +266,17 @@ function install_a_decent_qtcreator() {
     info_msg "You will now find 'Qt Creator (UBports)' in your application menu"
 }
 
+function install_clickable_stuffs() {
+    info_msg "Installing clickable and docker (yes it works in lxd X-) )"
+    run_exec "add-apt-repository -y ppa:bhdouglass/clickable && apt-get update && \
+        apt-get -y --no-install-recommends install docker.io clickable"
+    info_msg "Setting up clickable docker"
+    run_exec_user "clickable setup-docker"
+    info_msg "Restarting container"
+    lxc restart $CONTAINER_NAME
+    sleep 30
+}
+
 while [ "$1" != "" ]; do
     PARAM=`echo $1 | awk -F= '{print $1}'`
     VALUE=`echo $1 | awk -F= '{print $2}'`
@@ -326,6 +337,7 @@ fi
 
 if [ $TYPE == "dev" ]; then
     install_dev_libs
+    install_clickable_stuffs
     if [ ! -d "$QTCREATOR_INSTALL_DIR" ]; then
         install_a_decent_qtcreator
     fi
