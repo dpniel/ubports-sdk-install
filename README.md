@@ -11,7 +11,7 @@ doesn't work so great. A desktop file will be created so you can launch qtcreato
 Clone this repo
 
 ```
-git clone https://github.com/dpniel/ubports-sdk-setup
+git clone https://github.com/dpniel/ubports-sdk-install.git
 cd ubports-sdk-setup
 ```
 
